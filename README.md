@@ -1,6 +1,6 @@
 [![pub package](https://img.shields.io/pub/v/pdfium_bindings.svg?style=for-the-badge)](https://pub.dartlang.org/packages/pdfium_bindings)
 
-# Flutter Pdfium
+# pdfium_bindings
 
 This project aims to wrap the complete [Pdfium](https://pdfium.googlesource.com/pdfium/) API in dart, over FFI.
 
@@ -110,5 +110,6 @@ high-level API for rendering and editing PDFs on all 5 platforms.
 
 ## Thanks
 A [scientifichackers](https://github.com/scientifichackers/flutter-pdfium) for inspiring me 
+<Br>
 A big THANK YOU to Google for open sourcing Pdfium,
 and releasing [dart:ffi](https://dart.dev/guides/libraries/c-interop).
