@@ -77,7 +77,7 @@ void main() {
       format: Format.bgra, channels: Channels.rgba);
 
   // save bitmap as PNG.
-  File('saida.png').writeAsBytesSync(encodePng(image));
+  File('out.png').writeAsBytesSync(encodePng(image));
 
   //clean
   allocate.free(bitmap);
