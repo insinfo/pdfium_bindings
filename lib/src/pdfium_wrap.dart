@@ -45,15 +45,33 @@ class PdfiumWrap {
     pdfium.FPDF_InitLibraryWithConfig(config);
   }
 
-  PdfiumWrap loadDocumentFromPath(String path) {
+  PdfiumWrap loadDocumentFromPath(String path, {String? password}) {
     var filePathP = stringToNativeInt8(path);
-
-    _document = pdfium.FPDF_LoadDocument(filePathP, nullptr);
+    _document = pdfium.FPDF_LoadDocument(
+        filePathP, password != null ? stringToNativeInt8(password) : nullptr);
     if (_document == nullptr) {
       var err = pdfium.FPDF_GetLastError();
       throw PdfiumException.fromErrorCode(err);
     }
-    //allocator.free(filePathP);
+    return this;
+  }
+
+  PdfiumWrap loadDocumentFromBytes(Uint8List bytes, {String? password}) {
+    // Allocate a pointer large enough.
+    final frameData = allocator<Uint8>(bytes.length);
+    // Create a list that uses our pointer and copy in the image data.
+    final pointerList = frameData.asTypedList(bytes.length);
+    pointerList.setAll(0, bytes);
+
+    _document = pdfium.FPDF_LoadMemDocument64(
+        frameData.cast<Void>(),
+        bytes.length,
+        password != null ? stringToNativeInt8(password) : nullptr);
+
+    if (_document == nullptr) {
+      var err = pdfium.FPDF_GetLastError();
+      throw PdfiumException.fromErrorCode(err);
+    }
     return this;
   }
 
@@ -61,7 +79,6 @@ class PdfiumWrap {
     if (_document == nullptr) {
       throw PdfiumException(message: 'Document not load');
     }
-    print('loadPage $index');
     _page = pdfium.FPDF_LoadPage(_document!, index);
     if (_page == nullptr) {
       var err = pdfium.getLastErrorMessage();
@@ -136,7 +153,8 @@ class PdfiumWrap {
       double scale = 1,
       int rotate = 0,
       int flags = 0,
-      bool flush = false}) {
+      bool flush = false,
+      int pngLevel = 6}) {
     if (_page == nullptr) {
       throw PdfiumException(message: 'Page not load');
     }
@@ -151,13 +169,41 @@ class PdfiumWrap {
         format: Format.bgra, channels: Channels.rgba);
 
     // save bitmap as PNG.
-    File(outPath).writeAsBytesSync(encodePng(image), flush: flush);
+    File(outPath)
+        .writeAsBytesSync(encodePng(image, level: pngLevel), flush: flush);
+    return this;
+  }
+
+  PdfiumWrap savePageAsJpg(String outPath,
+      {int? width,
+      int? height,
+      int backgroundColor = 268435455,
+      double scale = 1,
+      int rotate = 0,
+      int flags = 0,
+      bool flush = false,
+      int qualityJpg = 100}) {
+    if (_page == nullptr) {
+      throw PdfiumException(message: 'Page not load');
+    }
+    // var backgroundStr = "FFFFFFFF"; // as int 268435455
+    var w = ((width ?? getPageWidth()) * scale).round();
+    var h = ((height ?? getPageHeight()) * scale).round();
+
+    var bytes = renderPageAsBytes(w, h,
+        backgroundColor: backgroundColor, rotate: rotate, flags: flags);
+
+    var image = Image.fromBytes(w, h, bytes,
+        format: Format.bgra, channels: Channels.rgba);
+
+    // save bitmap as PNG.
+    File(outPath)
+        .writeAsBytesSync(encodeJpg(image, quality: qualityJpg), flush: flush);
     return this;
   }
 
   PdfiumWrap closePage() {
     if (_page != null && _page != nullptr) {
-      print('closePage ');
       pdfium.FPDF_ClosePage(_page!);
 
       if (bitmap != null && bitmap != nullptr) {
@@ -169,7 +215,6 @@ class PdfiumWrap {
 
   PdfiumWrap closeDocument() {
     if (_document != null && _document != nullptr) {
-      print('closeDocument ');
       pdfium.FPDF_CloseDocument(_document!);
     }
     return this;

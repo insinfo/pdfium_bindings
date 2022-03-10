@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:pdfium_bindings/pdfium_bindings.dart';
 
 PdfiumWrap? pdfium;
