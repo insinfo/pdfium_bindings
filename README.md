@@ -4,7 +4,7 @@
 
 This project aims to wrap the complete [Pdfium](https://pdfium.googlesource.com/pdfium/) API in dart, over FFI.
 
-# Example:
+# Example low level:
 
 ```dart
 import 'dart:ffi';
@@ -97,6 +97,16 @@ void main() {
   allocate.free(config);
 }
 
+```
+# Example hi level:
+
+```dart
+void main() {
+  PdfiumWrap()
+      .loadDocumentFromPath('1417.pdf')
+      .loadPage(0)
+      .savePageAsPng('out.png')
+      .dispose();
 ```
 
 This has the potential to build a truly cross platform,

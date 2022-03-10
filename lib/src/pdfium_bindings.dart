@@ -616,7 +616,7 @@ class PDFiumBindings {
   late final _dart_FPDFBitmap_FillRect _FPDFBitmap_FillRect =
       _FPDFBitmap_FillRect_ptr.asFunction<_dart_FPDFBitmap_FillRect>();
 
-  ffi.Pointer<ffi.Void> FPDFBitmap_GetBuffer(
+  ffi.Pointer<ffi.Uint8> FPDFBitmap_GetBuffer(
     ffi.Pointer<fpdf_bitmap_t__> bitmap,
   ) {
     return _FPDFBitmap_GetBuffer(
@@ -1567,11 +1567,11 @@ typedef _dart_FPDFBitmap_FillRect = void Function(
   int color,
 );
 
-typedef _c_FPDFBitmap_GetBuffer = ffi.Pointer<ffi.Void> Function(
+typedef _c_FPDFBitmap_GetBuffer = ffi.Pointer<ffi.Uint8> Function(
   ffi.Pointer<fpdf_bitmap_t__> bitmap,
 );
 
-typedef _dart_FPDFBitmap_GetBuffer = ffi.Pointer<ffi.Void> Function(
+typedef _dart_FPDFBitmap_GetBuffer = ffi.Pointer<ffi.Uint8> Function(
   ffi.Pointer<fpdf_bitmap_t__> bitmap,
 );
 
