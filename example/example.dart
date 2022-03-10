@@ -87,7 +87,7 @@ void main() {
   allocate.free(filePathP);
 
   pdfium.FPDF_DestroyLibrary();
-  //allocate.free(config);
+  allocate.free(config);
 
   print('end: ${stopwatch.elapsed}');
 }
