@@ -12,5 +12,7 @@ void main() async {
       .loadDocumentFromBytes(bytes)
       .loadPage(0)
       .savePageAsJpg('out.jpg', qualityJpg: 80)
+      .closePage()
+      .closeDocument()
       .dispose();
 }

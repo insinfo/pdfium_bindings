@@ -221,8 +221,8 @@ class PdfiumWrap {
   }
 
   void dispose() {
-    closePage();
-    closeDocument();
+    // closePage();
+    // closeDocument();
     pdfium.FPDF_DestroyLibrary();
     allocator.free(config);
   }

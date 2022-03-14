@@ -9,3 +9,7 @@
 ## 1.2.0
 
 -  loadDocumentFromBytes and savePageAsJpg
+
+## 1.3.0
+
+- fix memory leak
