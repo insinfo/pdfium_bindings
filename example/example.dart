@@ -73,9 +73,12 @@ void main() {
   //var stride = pdfium.FPDFBitmap_GetStride(bitmap);
   //print('stride $stride');
 
-  var image = Image.fromBytes(
-      width, height, pointer.asTypedList(width * height * 4),
-      format: Format.bgra, channels: Channels.rgba);
+    Image image = Image.fromBytes(
+      width: width,
+      height: height,
+      bytes: pointer.asTypedList(width * height * 4).buffer,
+      numChannels: 4,
+    );
 
   // save bitmap as PNG.
   File('out.png').writeAsBytesSync(encodePng(image));

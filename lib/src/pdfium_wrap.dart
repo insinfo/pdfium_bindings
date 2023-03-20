@@ -165,8 +165,12 @@ class PdfiumWrap {
     var bytes = renderPageAsBytes(w, h,
         backgroundColor: backgroundColor, rotate: rotate, flags: flags);
 
-    var image = Image.fromBytes(w, h, bytes,
-        format: Format.bgra, channels: Channels.rgba);
+    Image image = Image.fromBytes(
+      width: w,
+      height: h,
+      bytes: bytes.buffer,
+      numChannels: 4,
+    );
 
     // save bitmap as PNG.
     File(outPath)
@@ -193,8 +197,11 @@ class PdfiumWrap {
     var bytes = renderPageAsBytes(w, h,
         backgroundColor: backgroundColor, rotate: rotate, flags: flags);
 
-    var image = Image.fromBytes(w, h, bytes,
-        format: Format.bgra, channels: Channels.rgba);
+    Image image = Image.fromBytes(
+      width: w,
+      height: h,
+      bytes: bytes.buffer
+    );
 
     // save bitmap as PNG.
     File(outPath)
