@@ -85,6 +85,7 @@ void main() {
       width: width,
       height: height,
       bytes: pointer.asTypedList(width * height * 4).buffer,
+      order: ChannelOrder.bgra,
       numChannels: 4,
   );
 
