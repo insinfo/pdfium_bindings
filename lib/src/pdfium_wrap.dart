@@ -169,6 +169,7 @@ class PdfiumWrap {
       width: w,
       height: h,
       bytes: bytes.buffer,
+      order: ChannelOrder.bgra,
       numChannels: 4,
     );
 
@@ -200,7 +201,9 @@ class PdfiumWrap {
     Image image = Image.fromBytes(
       width: w,
       height: h,
-      bytes: bytes.buffer
+      bytes: bytes.buffer,
+      order: ChannelOrder.bgra,
+      numChannels: 4,
     );
 
     // save bitmap as PNG.
