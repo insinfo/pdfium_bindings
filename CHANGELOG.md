@@ -13,3 +13,7 @@
 ## 1.3.0
 
 - fix memory leak
+
+## 2.0.0
+
+- Upgrade dependencies
