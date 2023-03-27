@@ -7,7 +7,7 @@ include: package:lint/package.yaml
 # Uncomment to specify additional rules.
 # linter:
 #   rules:
-#     - camel_case_types
+#     - public_member_api_docs
 
 analyzer:
   exclude:

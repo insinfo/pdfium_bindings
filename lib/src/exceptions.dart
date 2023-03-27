@@ -1,8 +1,16 @@
+/// An exception class that's thrown when a pdfium operation is unable to be
+/// done correctly.
 class PdfiumException implements Exception {
+  /// Error code of the exception
   int? errorCode;
+
+  /// A message describing the error.
   String? message = '';
+
+  /// Default constructor of PdfiumException
   PdfiumException({this.message});
 
+  /// Factory constructor to create a FileException with an error code
   factory PdfiumException.fromErrorCode(int errorCode) {
     final e = FileException();
     e.errorCode = errorCode;
