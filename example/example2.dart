@@ -13,12 +13,12 @@ void main() {
   pdfium!.dispose();
 }
 
-var count = 0;
+int count = 0;
 void loop() {
   pdfium!.closeDocument();
   pdfium!.loadDocumentFromPath('1417.pdf');
 
-  var pageCount = pdfium!.getPageCount();
+  final pageCount = pdfium!.getPageCount();
   for (var i = 0; i < pageCount; i++) {
     pdfium!
         .loadPage(i)
