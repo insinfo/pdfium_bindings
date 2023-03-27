@@ -4,13 +4,14 @@ class PdfiumException implements Exception {
   PdfiumException({this.message});
 
   factory PdfiumException.fromErrorCode(int errorCode) {
-    var e = FileException();
+    final e = FileException();
     e.errorCode = errorCode;
     return e;
   }
 
   @override
   String toString() {
+    // ignore: no_runtimetype_tostring
     return '$runtimeType: $errorCode | $message';
   }
 }

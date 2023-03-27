@@ -15,4 +15,5 @@ dev_dependencies:
   build_runner: ^2.1.2
   ffigen: any #^2.4.2
   http: any
+  lint: ^2.0.0
 #dart run ffigen --config ffigen.yaml

@@ -3,10 +3,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
-import 'package:pdfium_bindings/pdfium_bindings.dart';
-import 'package:path/path.dart' as path;
-import 'package:pdfium_bindings/src/utils.dart';
 import 'package:image/image.dart';
+import 'package:path/path.dart' as path;
+import 'package:pdfium_bindings/pdfium_bindings.dart';
 
 class PdfiumWrap {
   late PDFiumBindings pdfium;
@@ -46,11 +45,11 @@ class PdfiumWrap {
   }
 
   PdfiumWrap loadDocumentFromPath(String path, {String? password}) {
-    var filePathP = stringToNativeInt8(path);
+    final filePathP = stringToNativeInt8(path);
     _document = pdfium.FPDF_LoadDocument(
-        filePathP, password != null ? stringToNativeInt8(password) : nullptr);
+        filePathP, password != null ? stringToNativeInt8(password) : nullptr,);
     if (_document == nullptr) {
-      var err = pdfium.FPDF_GetLastError();
+      final err = pdfium.FPDF_GetLastError();
       throw PdfiumException.fromErrorCode(err);
     }
     return this;
@@ -66,10 +65,10 @@ class PdfiumWrap {
     _document = pdfium.FPDF_LoadMemDocument64(
         frameData.cast<Void>(),
         bytes.length,
-        password != null ? stringToNativeInt8(password) : nullptr);
+        password != null ? stringToNativeInt8(password) : nullptr,);
 
     if (_document == nullptr) {
-      var err = pdfium.FPDF_GetLastError();
+      final err = pdfium.FPDF_GetLastError();
       throw PdfiumException.fromErrorCode(err);
     }
     return this;
@@ -81,7 +80,7 @@ class PdfiumWrap {
     }
     _page = pdfium.FPDF_LoadPage(_document!, index);
     if (_page == nullptr) {
-      var err = pdfium.getLastErrorMessage();
+      final err = pdfium.getLastErrorMessage();
       throw PageException(message: err);
     }
     return this;
@@ -114,17 +113,17 @@ class PdfiumWrap {
   /// The byte order is BGRx (the last byte unused if no alpha channel) or
   /// BGRA. flags FPDF_ANNOT | FPDF_LCD_TEXT
   Uint8List renderPageAsBytes(int width, int height,
-      {int backgroundColor = 268435455, int rotate = 0, int flags = 0}) {
+      {int backgroundColor = 268435455, int rotate = 0, int flags = 0,}) {
     if (_page == nullptr) {
       throw PdfiumException(message: 'Page not load');
     }
     // var backgroundStr = "FFFFFFFF"; // as int 268435455
-    var w = width;
-    var h = height;
-    var start_x = 0;
-    var size_x = w;
-    var start_y = 0;
-    var size_y = h;
+    final w = width;
+    final h = height;
+    const startX = 0;
+    final sizeX = w;
+    const startY = 0;
+    final sizeY = h;
 
     // Create empty bitmap and render page onto it
     // The bitmap always uses 4 bytes per pixel. The first byte is always
@@ -135,13 +134,13 @@ class PdfiumWrap {
     bitmap = pdfium.FPDFBitmap_Create(w, h, 0);
     pdfium.FPDFBitmap_FillRect(bitmap!, 0, 0, w, h, backgroundColor);
     pdfium.FPDF_RenderPageBitmap(
-        bitmap!, _page!, start_x, start_y, size_x, size_y, rotate, flags);
+        bitmap!, _page!, startX, startY, sizeX, sizeY, rotate, flags,);
     //  The pointer to the first byte of the bitmap buffer The data is in BGRA format
     buffer = pdfium.FPDFBitmap_GetBuffer(bitmap!);
     //stride = width * 4 bytes per pixel BGRA
     //var stride = pdfium.FPDFBitmap_GetStride(bitmap);
     //print('stride $stride');
-    var list = buffer!.asTypedList(w * h * 4);
+    final list = buffer!.asTypedList(w * h * 4);
 
     return list;
   }
@@ -154,18 +153,18 @@ class PdfiumWrap {
       int rotate = 0,
       int flags = 0,
       bool flush = false,
-      int pngLevel = 6}) {
+      int pngLevel = 6,}) {
     if (_page == nullptr) {
       throw PdfiumException(message: 'Page not load');
     }
     // var backgroundStr = "FFFFFFFF"; // as int 268435455
-    var w = ((width ?? getPageWidth()) * scale).round();
-    var h = ((height ?? getPageHeight()) * scale).round();
+    final w = ((width ?? getPageWidth()) * scale).round();
+    final h = ((height ?? getPageHeight()) * scale).round();
 
-    var bytes = renderPageAsBytes(w, h,
-        backgroundColor: backgroundColor, rotate: rotate, flags: flags);
+    final bytes = renderPageAsBytes(w, h,
+        backgroundColor: backgroundColor, rotate: rotate, flags: flags,);
 
-    Image image = Image.fromBytes(
+    final Image image = Image.fromBytes(
       width: w,
       height: h,
       bytes: bytes.buffer,
@@ -187,18 +186,18 @@ class PdfiumWrap {
       int rotate = 0,
       int flags = 0,
       bool flush = false,
-      int qualityJpg = 100}) {
+      int qualityJpg = 100,}) {
     if (_page == nullptr) {
       throw PdfiumException(message: 'Page not load');
     }
     // var backgroundStr = "FFFFFFFF"; // as int 268435455
-    var w = ((width ?? getPageWidth()) * scale).round();
-    var h = ((height ?? getPageHeight()) * scale).round();
+    final w = ((width ?? getPageWidth()) * scale).round();
+    final h = ((height ?? getPageHeight()) * scale).round();
 
-    var bytes = renderPageAsBytes(w, h,
-        backgroundColor: backgroundColor, rotate: rotate, flags: flags);
+    final bytes = renderPageAsBytes(w, h,
+        backgroundColor: backgroundColor, rotate: rotate, flags: flags,);
 
-    Image image = Image.fromBytes(
+    final Image image = Image.fromBytes(
       width: w,
       height: h,
       bytes: bytes.buffer,
