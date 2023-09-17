@@ -11,6 +11,7 @@ import 'package:pdfium_bindings/pdfium_bindings.dart';
 class PdfiumWrap {
   /// Bindings to PDFium
   late PDFiumBindings pdfium;
+
   /// PDFium configuration
   late Pointer<FPDF_LIBRARY_CONFIG> config;
   final Allocator allocator;
@@ -19,26 +20,35 @@ class PdfiumWrap {
   Pointer<Uint8>? buffer;
   Pointer<fpdf_bitmap_t__>? bitmap;
 
-  /// Default constructor to use the class
-  PdfiumWrap({String? libraryPath, this.allocator = calloc}) {
+  /// Default constructor to use the class, note that if [dylib] field is
+  /// specified, it will override the library path.
+  PdfiumWrap({
+    String? libraryPath,
+    this.allocator = calloc,
+    DynamicLibrary? dylib,
+  }) {
     //for windows
-    var libPath = path.join(Directory.current.path, 'pdfium.dll');
+    if (dylib == null) {
+      var libPath = path.join(Directory.current.path, 'pdfium.dll');
 
-    if (Platform.isMacOS) {
-      libPath = path.join(Directory.current.path, 'libpdfium.dylib');
-    } else if (Platform.isLinux || Platform.isAndroid) {
-      libPath = path.join(Directory.current.path, 'libpdfium.so');
-    }
-    if (libraryPath != null) {
-      libPath = libraryPath;
-    }
-    late DynamicLibrary dylib;
-    if (Platform.isIOS) {
-      DynamicLibrary.process();
+      if (Platform.isMacOS) {
+        libPath = path.join(Directory.current.path, 'libpdfium.dylib');
+      } else if (Platform.isLinux || Platform.isAndroid) {
+        libPath = path.join(Directory.current.path, 'libpdfium.so');
+      }
+      if (libraryPath != null) {
+        libPath = libraryPath;
+      }
+      late DynamicLibrary dylib;
+      if (Platform.isIOS) {
+        DynamicLibrary.process();
+      } else {
+        dylib = DynamicLibrary.open(libPath);
+      }
+      pdfium = PDFiumBindings(dylib);
     } else {
-      dylib = DynamicLibrary.open(libPath);
+      pdfium = PDFiumBindings(dylib);
     }
-    pdfium = PDFiumBindings(dylib);
 
     config = allocator<FPDF_LIBRARY_CONFIG>();
     config.ref.version = 2;
@@ -56,7 +66,9 @@ class PdfiumWrap {
   PdfiumWrap loadDocumentFromPath(String path, {String? password}) {
     final filePathP = stringToNativeInt8(path);
     _document = pdfium.FPDF_LoadDocument(
-        filePathP, password != null ? stringToNativeInt8(password) : nullptr,);
+      filePathP,
+      password != null ? stringToNativeInt8(password) : nullptr,
+    );
     if (_document == nullptr) {
       final err = pdfium.FPDF_GetLastError();
       throw PdfiumException.fromErrorCode(err);
@@ -77,9 +89,10 @@ class PdfiumWrap {
     pointerList.setAll(0, bytes);
 
     _document = pdfium.FPDF_LoadMemDocument64(
-        frameData.cast<Void>(),
-        bytes.length,
-        password != null ? stringToNativeInt8(password) : nullptr,);
+      frameData.cast<Void>(),
+      bytes.length,
+      password != null ? stringToNativeInt8(password) : nullptr,
+    );
 
     if (_document == nullptr) {
       final err = pdfium.FPDF_GetLastError();
@@ -140,8 +153,13 @@ class PdfiumWrap {
   /// double word aligned.
   /// The byte order is BGRx (the last byte unused if no alpha channel) or
   /// BGRA. flags FPDF_ANNOT | FPDF_LCD_TEXT
-  Uint8List renderPageAsBytes(int width, int height,
-      {int backgroundColor = 268435455, int rotate = 0, int flags = 0,}) {
+  Uint8List renderPageAsBytes(
+    int width,
+    int height, {
+    int backgroundColor = 268435455,
+    int rotate = 0,
+    int flags = 0,
+  }) {
     if (_page == nullptr) {
       throw PdfiumException(message: 'Page not load');
     }
@@ -162,7 +180,15 @@ class PdfiumWrap {
     bitmap = pdfium.FPDFBitmap_Create(w, h, 0);
     pdfium.FPDFBitmap_FillRect(bitmap!, 0, 0, w, h, backgroundColor);
     pdfium.FPDF_RenderPageBitmap(
-        bitmap!, _page!, startX, startY, sizeX, sizeY, rotate, flags,);
+      bitmap!,
+      _page!,
+      startX,
+      startY,
+      sizeX,
+      sizeY,
+      rotate,
+      flags,
+    );
     //  The pointer to the first byte of the bitmap buffer The data is in BGRA format
     buffer = pdfium.FPDFBitmap_GetBuffer(bitmap!);
     //stride = width * 4 bytes per pixel BGRA
@@ -177,15 +203,17 @@ class PdfiumWrap {
   ///
   /// Throws an [PdfiumException] if no page is loaded.
   /// Returns a instance of [PdfiumWrap]
-  PdfiumWrap savePageAsPng(String outPath,
-      {int? width,
-      int? height,
-      int backgroundColor = 268435455,
-      double scale = 1,
-      int rotate = 0,
-      int flags = 0,
-      bool flush = false,
-      int pngLevel = 6,}) {
+  PdfiumWrap savePageAsPng(
+    String outPath, {
+    int? width,
+    int? height,
+    int backgroundColor = 268435455,
+    double scale = 1,
+    int rotate = 0,
+    int flags = 0,
+    bool flush = false,
+    int pngLevel = 6,
+  }) {
     if (_page == nullptr) {
       throw PdfiumException(message: 'Page not load');
     }
@@ -193,8 +221,13 @@ class PdfiumWrap {
     final w = ((width ?? getPageWidth()) * scale).round();
     final h = ((height ?? getPageHeight()) * scale).round();
 
-    final bytes = renderPageAsBytes(w, h,
-        backgroundColor: backgroundColor, rotate: rotate, flags: flags,);
+    final bytes = renderPageAsBytes(
+      w,
+      h,
+      backgroundColor: backgroundColor,
+      rotate: rotate,
+      flags: flags,
+    );
 
     final Image image = Image.fromBytes(
       width: w,
@@ -214,15 +247,17 @@ class PdfiumWrap {
   ///
   /// Throws an [PdfiumException] if no page is loaded.
   /// Returns a instance of [PdfiumWrap]
-  PdfiumWrap savePageAsJpg(String outPath,
-      {int? width,
-      int? height,
-      int backgroundColor = 268435455,
-      double scale = 1,
-      int rotate = 0,
-      int flags = 0,
-      bool flush = false,
-      int qualityJpg = 100,}) {
+  PdfiumWrap savePageAsJpg(
+    String outPath, {
+    int? width,
+    int? height,
+    int backgroundColor = 268435455,
+    double scale = 1,
+    int rotate = 0,
+    int flags = 0,
+    bool flush = false,
+    int qualityJpg = 100,
+  }) {
     if (_page == nullptr) {
       throw PdfiumException(message: 'Page not load');
     }
@@ -230,8 +265,13 @@ class PdfiumWrap {
     final w = ((width ?? getPageWidth()) * scale).round();
     final h = ((height ?? getPageHeight()) * scale).round();
 
-    final bytes = renderPageAsBytes(w, h,
-        backgroundColor: backgroundColor, rotate: rotate, flags: flags,);
+    final bytes = renderPageAsBytes(
+      w,
+      h,
+      backgroundColor: backgroundColor,
+      rotate: rotate,
+      flags: flags,
+    );
 
     final Image image = Image.fromBytes(
       width: w,
