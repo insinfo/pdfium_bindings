@@ -74,6 +74,26 @@ await PdfiumWrap.mergeDocuments(
 );
 ```
 
+## Managing isolate contention
+
+When several isolates need to touch the same PDFium instance you can choose between two locking helpers:
+
+- **File-backed lock (`_FileMutex`)**
+  - ✅ Allows `await` inside the critical section—the OS keeps the file lock while the future runs.
+  - ✅ Coordinates across different processes (multiple `dart` executables) because the lock lives in the filesystem.
+  - ❌ Slower and more fragile; it depends on filesystem permissions, temp directories, and platform quirks.
+  - ❌ Opens and closes a file on every call.
+  - ❌ Adds disk I/O around native code that was not designed for it.
+- **`native_synchronization` mutex (`PdfiumServiceMutex`)**
+  - ✅ Tailored for multiple isolates inside the same process—exactly the PDFium contention scenario.
+  - ✅ No disk I/O and minimal overhead.
+  - ✅ Share the mutex via `asSendable` so every isolate contends for the same lock explicitly.
+  - ✅ Clear flow: enter `runLocked`, finish, release.
+  - ❌ The critical section must remain synchronous (no `await`).
+  - ❌ Cannot coordinate multiple processes.
+
+For most “many isolates, one PDFium DLL” cases, prefer `PdfiumServiceMutex`. Switch to the file-backed lock only when you truly need cross-process coordination or asynchronous work while holding the mutex.
+
 ## Low-level access
 
 Need the raw C API? Import `pdfium_bindings/src/pdfium_bindings.dart` and work with the generated

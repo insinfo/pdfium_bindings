@@ -12,5 +12,6 @@ include: package:lint/package.yaml
 analyzer:
   errors:
     require_trailing_commas: ignore
+    directives_ordering: ignore
   exclude:
     - lib/src/pdfium_bindings.dart

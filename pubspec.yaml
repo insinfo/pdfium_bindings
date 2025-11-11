@@ -9,13 +9,16 @@ environment:
 dependencies:
   ffi: '>=2.1.1 <4.0.0'
   image: '>=4.0.0 <5.0.0'
+  native_synchronization: ^0.3.1
   path: '>=1.9.0 <2.5.0'
+  
 
 dev_dependencies:
   build_runner: ^2.4.15
   ffigen: ^19.0.0
   http: ^1.6.0
   lint: ^2.7.0
+ 
   test: ^1.26.3
  
 #dart run ffigen --config ffigen.yaml
