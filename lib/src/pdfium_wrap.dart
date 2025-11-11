@@ -1,4 +1,7 @@
 //C:\MyDartProjects\pdfium\pdfium_bindings\lib\src\pdfium_wrap.dart
+// ignore_for_file: camel_case_types, non_constant_identifier_names
+
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
@@ -10,6 +13,7 @@ import 'package:path/path.dart' as path;
 import 'package:pdfium_bindings/src/exceptions.dart';
 import 'package:pdfium_bindings/src/extensions.dart';
 import 'package:pdfium_bindings/src/pdfium_bindings.dart';
+import 'package:pdfium_bindings/src/pdfium_editing_bindings.dart';
 import 'package:pdfium_bindings/src/utils.dart';
 
 /// Immutable configuration for initializing the PDFium library.
@@ -55,6 +59,35 @@ class PdfiumConfig {
   }
 }
 
+/// Describes a document to import when merging PDFs.
+class PdfMergeSource {
+  const PdfMergeSource({
+    required this.documentPath,
+    this.password,
+    this.pageRange,
+    this.pageIndices,
+    this.insertIndex,
+  }) : assert(
+          pageRange == null || pageIndices == null,
+          'Provide either pageRange or pageIndices, not both.',
+        );
+
+  /// Path to the source PDF.
+  final String documentPath;
+
+  /// Optional password for encrypted documents.
+  final String? password;
+
+  /// Range string (1-based, e.g. "1-3") to copy.
+  final String? pageRange;
+
+  /// Specific zero-based page indices to copy.
+  final List<int>? pageIndices;
+
+  /// Optional insert index for the destination document.
+  final int? insertIndex;
+}
+
 class _CleanupState {
   _CleanupState({required this.pdfium, required this.allocator});
 
@@ -83,6 +116,28 @@ class _AsyncImageResult {
 }
 
 const int _kDefaultBackgroundColor = 0x0FFFFFFF;
+const int _kSaveFlagNoIncremental = 2;
+
+final Map<int, RandomAccessFile> _fileWriterRegistry =
+    <int, RandomAccessFile>{};
+
+int _fileWriteCallback(
+  Pointer<FPDF_FILEWRITE> fileWrite,
+  Pointer<Void> data,
+  int size,
+) {
+  final sink = _fileWriterRegistry[fileWrite.address];
+  if (sink == null) {
+    return 0;
+  }
+  try {
+    final bytes = data.cast<Uint8>().asTypedList(size);
+    sink.writeFromSync(bytes);
+    return 1;
+  } on Object {
+    return 0;
+  }
+}
 
 /// Wrapper class to abstract the PDFium logic.
 class PdfiumWrap {
@@ -102,6 +157,7 @@ class PdfiumWrap {
         ? DynamicLibrary.process()
         : DynamicLibrary.open(resolvedLibraryPath);
     pdfium = PDFiumBindings(dylib);
+    _editing = PdfiumEditingBindings(dylib);
 
     _cleanup = _CleanupState(pdfium: pdfium, allocator: allocator);
     _initializeLibrary();
@@ -110,6 +166,7 @@ class PdfiumWrap {
 
   /// Bindings to PDFium.
   late final PDFiumBindings pdfium;
+  late final PdfiumEditingBindings _editing;
 
   /// PDFium configuration pointer.
   Pointer<FPDF_LIBRARY_CONFIG>? _configPointer;
@@ -273,7 +330,7 @@ class PdfiumWrap {
     _bitmap = pdfium.FPDFBitmap_Create(width, height, 0);
     _cleanup.bitmap = _bitmap;
     if (_isPointerNull(_bitmap)) {
-    const message = 'Unable to create bitmap';
+      const message = 'Unable to create bitmap';
       _logRenderFailure(message, width, height, flags, rotate);
       throw PageRenderException(
         message: message,
@@ -300,7 +357,7 @@ class PdfiumWrap {
 
     final rawBuffer = pdfium.FPDFBitmap_GetBuffer(_bitmap!);
     if (rawBuffer == nullptr) {
-    const message = 'Unable to obtain bitmap buffer';
+      const message = 'Unable to obtain bitmap buffer';
       _logRenderFailure(message, width, height, flags, rotate);
       throw PageRenderException(
         message: message,
@@ -492,6 +549,58 @@ class PdfiumWrap {
     return this;
   }
 
+  /// Exports selected pages from [sourcePath] into a new PDF at [outputPath].
+  static Future<void> extractPagesFromFile({
+    required PdfiumConfig config,
+    required String sourcePath,
+    String? password,
+    required String outputPath,
+    List<int>? pageIndices,
+    String? pageRange,
+    bool copyViewerPreferences = true,
+  }) {
+    final sources = <PdfMergeSource>[
+      PdfMergeSource(
+        documentPath: sourcePath,
+        password: password,
+        pageIndices: pageIndices,
+        pageRange: pageRange,
+      ),
+    ];
+    return mergeDocuments(
+      config: config,
+      sources: sources,
+      outputPath: outputPath,
+      copyViewerPreferences: copyViewerPreferences,
+    );
+  }
+
+  /// Merges multiple [PdfMergeSource] documents into a new file at [outputPath].
+  static Future<void> mergeDocuments({
+    required PdfiumConfig config,
+    required List<PdfMergeSource> sources,
+    required String outputPath,
+    bool copyViewerPreferences = true,
+  }) {
+    return Future<void>.sync(() {
+      if (sources.isEmpty) {
+        throw ArgumentError.value(
+            sources, 'sources', 'Provide at least one PDF');
+      }
+
+      final wrapper = PdfiumWrap(config: config);
+      try {
+        wrapper._mergeDocumentsInternal(
+          sources: sources,
+          outputPath: outputPath,
+          copyViewerPreferences: copyViewerPreferences,
+        );
+      } finally {
+        wrapper.dispose();
+      }
+    });
+  }
+
   /// Closes the currently loaded page.
   PdfiumWrap closePage() {
     _ensureNotDestroyed();
@@ -647,6 +756,40 @@ class PdfiumWrap {
     _cleanup.libraryDestroyed = true;
   }
 
+  static String _indicesToRangeString(List<int> indices) {
+    if (indices.isEmpty) {
+      return '';
+    }
+    final sorted = List<int>.from(indices)..sort();
+    final buffer = StringBuffer();
+    var start = sorted.first;
+    var previous = start;
+
+    void flush() {
+      if (buffer.isNotEmpty) {
+        buffer.write(',');
+      }
+      if (start == previous) {
+        buffer.write(start + 1);
+      } else {
+        buffer.write('${start + 1}-${previous + 1}');
+      }
+    }
+
+    for (var i = 1; i < sorted.length; i++) {
+      final current = sorted[i];
+      if (current == previous + 1) {
+        previous = current;
+        continue;
+      }
+      flush();
+      start = previous = current;
+    }
+
+    flush();
+    return buffer.toString();
+  }
+
   static int _resolveDimension(
     int? explicitValue,
     double pageValue,
@@ -654,6 +797,128 @@ class PdfiumWrap {
   ) {
     final value = explicitValue ?? (pageValue * scale).round();
     return value <= 0 ? 1 : value;
+  }
+
+  void _mergeDocumentsInternal({
+    required List<PdfMergeSource> sources,
+    required String outputPath,
+    required bool copyViewerPreferences,
+  }) {
+    final destDoc = _editing.createNewDocument();
+    if (_isPointerNull(destDoc)) {
+      throw PdfiumException(message: 'Failed to create destination document');
+    }
+
+    final openedDocs = <Pointer<fpdf_document_t__>>[];
+    try {
+      for (final source in sources) {
+        final pathPtr =
+            stringToNativeInt8(source.documentPath, allocator: allocator);
+        Pointer<Int8>? passwordPtr;
+        if (source.password != null) {
+          passwordPtr =
+              stringToNativeInt8(source.password!, allocator: allocator);
+        }
+
+        final doc = pdfium.FPDF_LoadDocument(
+          pathPtr.cast(),
+          passwordPtr != null ? passwordPtr.cast() : nullptr,
+        );
+
+        allocator.free(pathPtr);
+        if (passwordPtr != null) {
+          allocator.free(passwordPtr);
+        }
+
+        if (_isPointerNull(doc)) {
+          final err = pdfium.FPDF_GetLastError();
+          throw PdfiumException.fromErrorCode(err);
+        }
+
+        openedDocs.add(doc);
+
+        final insertAt =
+            source.insertIndex ?? pdfium.FPDF_GetPageCount(destDoc);
+        var success = false;
+        Pointer<Int8>? rangePtr;
+        try {
+          if (source.pageIndices != null && source.pageIndices!.isNotEmpty) {
+            final rangeString = _indicesToRangeString(source.pageIndices!);
+            rangePtr = stringToNativeInt8(rangeString, allocator: allocator);
+            success = _editing.importPages(
+              destDoc,
+              doc,
+              rangePtr.cast(),
+              insertAt,
+            );
+          } else {
+            rangePtr = source.pageRange != null
+                ? stringToNativeInt8(source.pageRange!, allocator: allocator)
+                : null;
+            success = _editing.importPages(
+              destDoc,
+              doc,
+              rangePtr != null ? rangePtr.cast() : nullptr,
+              insertAt,
+            );
+          }
+        } finally {
+          if (rangePtr != null) {
+            allocator.free(rangePtr);
+          }
+        }
+
+        if (!success) {
+          throw PageException(
+            message: 'Failed to import pages from ${source.documentPath}',
+          );
+        }
+      }
+
+      if (copyViewerPreferences && openedDocs.isNotEmpty) {
+        _editing.copyViewerPreferences(destDoc, openedDocs.first);
+      }
+
+      _saveDocumentToPath(destDoc, outputPath);
+    } finally {
+      for (final doc in openedDocs) {
+        pdfium.FPDF_CloseDocument(doc);
+      }
+    }
+  }
+
+  void _saveDocumentToPath(
+    Pointer<fpdf_document_t__> document,
+    String outputPath,
+  ) {
+    final writer = allocator<FPDF_FILEWRITE>();
+    writer.ref
+      ..version = 1
+      ..WriteBlock = Pointer.fromFunction<WriteBlockNative>(
+        _fileWriteCallback,
+        0,
+      );
+
+    final file = File(outputPath);
+    file.parent.createSync(recursive: true);
+    final sink = file.openSync(mode: FileMode.write);
+    _fileWriterRegistry[writer.address] = sink;
+
+    final success = _editing.saveAsCopy(
+      document,
+      writer,
+      _kSaveFlagNoIncremental,
+    );
+
+    pdfium.FPDF_CloseDocument(document);
+
+    sink.closeSync();
+    _fileWriterRegistry.remove(writer.address);
+    allocator.free(writer);
+
+    if (!success) {
+      throw PdfiumException(message: 'Failed to save PDF to $outputPath');
+    }
   }
 
   static String _resolveLibraryPath(String? overridePath) {

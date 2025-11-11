@@ -138,16 +138,71 @@ void main() {
       expect(() => wrapper.dispose(), returnsNormally);
       expect(() => wrapper.getPageCount(), throwsA(isA<StateError>()));
     }, skip: skipReason);
+
+    test('extractPagesFromFile writes selected pages', () async {
+      final outDir = Directory.systemTemp.createTempSync('pdfium_split_');
+      final outPath = p.join(outDir.path, 'single_page.pdf');
+
+      await PdfiumWrap.extractPagesFromFile(
+        config: config,
+        sourcePath: pdfPath,
+        outputPath: outPath,
+        pageIndices: const [0],
+        copyViewerPreferences: false,
+      );
+
+      final check = PdfiumWrap(config: config);
+      check.loadDocumentFromPath(outPath);
+      expect(check.getPageCount(), 1);
+      check.dispose();
+
+      outDir.deleteSync(recursive: true);
+    }, skip: skipReason);
+
+    test('mergeDocuments combines multiple sources', () async {
+      final outDir = Directory.systemTemp.createTempSync('pdfium_merge_');
+      final mergedPath = p.join(outDir.path, 'merged.pdf');
+
+      wrapper.loadDocumentFromPath(pdfPath);
+      final pageCount = wrapper.getPageCount();
+      wrapper.closeDocument();
+      expect(pageCount, greaterThan(0));
+
+      await PdfiumWrap.mergeDocuments(
+        config: config,
+        sources: [
+          PdfMergeSource(documentPath: pdfPath, pageIndices: const [0]),
+          PdfMergeSource(documentPath: pdfPath, pageRange: '1'),
+        ],
+        outputPath: mergedPath,
+        copyViewerPreferences: false,
+      );
+
+      final merged = PdfiumWrap(config: config);
+      merged.loadDocumentFromPath(mergedPath);
+      expect(merged.getPageCount(), 2);
+      merged.dispose();
+
+      outDir.deleteSync(recursive: true);
+    }, skip: skipReason);
   });
 }
 
 String? _resolveLibraryPath() {
+  final envOverride = Platform.environment['PDFIUM_LIB_PATH'];
+  if (envOverride != null && envOverride.isNotEmpty) {
+    return envOverride;
+  }
+
   final root = Directory.current.path;
-  final candidates = <String>[
-    p.join(root, 'pdfium.dll'),
-    p.join(root, 'libpdfium.so'),
-    p.join(root, 'libpdfium.dylib'),
-  ];
+  final candidates = <String>[];
+  if (Platform.isWindows) {
+    candidates.add(p.join(root, 'pdfium.dll'));
+  } else if (Platform.isLinux || Platform.isAndroid) {
+    candidates.add(p.join(root, 'libpdfium.so'));
+  } else if (Platform.isMacOS) {
+    candidates.add(p.join(root, 'libpdfium.dylib'));
+  }
 
   for (final candidate in candidates) {
     if (File(candidate).existsSync()) {

@@ -9,6 +9,7 @@ High-level and low-level [PDFium](https://pdfium.googlesource.com/pdfium/) bindi
 - `PdfiumWrap` provides a safe, finalizer-backed API for loading documents, pages, and rendering output.
 - Configurable via `PdfiumConfig`, including library location, font paths, and V8 embedder slot support.
 - Built-in helpers for BGRA buffers, PNG/JPEG export, sub-region rendering, and isolate-based image rendering.
+- Includes page extraction and merge helpers built on top of the low-level editing APIs.
 - Ships with the generated low-level bindings when you need direct access to the PDFium C API.
 
 ## Installation
@@ -51,6 +52,26 @@ final image = await PdfiumWrap.renderPageToImageAsync(
 );
 
 print('Rendered ${image.width}x${image.height}');
+```
+
+## Page extraction and merging
+
+```dart
+await PdfiumWrap.extractPagesFromFile(
+  config: const PdfiumConfig(libraryPath: 'pdfium.dll'),
+  sourcePath: 'source.pdf',
+  outputPath: 'page_1.pdf',
+  pageIndices: const [0],
+);
+
+await PdfiumWrap.mergeDocuments(
+  config: const PdfiumConfig(libraryPath: 'pdfium.dll'),
+  sources: [
+    PdfMergeSource(documentPath: 'first.pdf', pageRange: '1-2'),
+    PdfMergeSource(documentPath: 'second.pdf', pageIndices: const [0]),
+  ],
+  outputPath: 'merged.pdf',
+);
 ```
 
 ## Low-level access
