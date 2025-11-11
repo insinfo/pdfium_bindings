@@ -10,5 +10,7 @@ include: package:lint/package.yaml
 #     - public_member_api_docs
 
 analyzer:
+  errors:
+    require_trailing_commas: ignore
   exclude:
     - lib/src/pdfium_bindings.dart

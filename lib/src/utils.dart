@@ -1,3 +1,4 @@
+//C:\MyDartProjects\pdfium\pdfium_bindings\lib\src\utils.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -70,13 +71,13 @@ String sanitizeFilename(String input, [String replacement = '_']) {
   // var windowsTrailingRe = RegExp(r'[\. ]+$');
 
   var sanitized = input
-      .replaceAll('�', replacement)
+      .replaceAll('', replacement)
       .replaceAll('А╟', replacement)
       .replaceAll('╟', replacement)
       .replaceAll(illegalRe, replacement)
       .replaceAll(controlRe, replacement)
       .replaceAll(reservedRe, replacement);
-  //  .replaceAll(windowsReservedRe, replacement)
+  //  .replaceAll(windowsReservedRe, replacement)
   // .replaceAll(windowsTrailingRe, replacement);
 
   if (windowsReservedRe.hasMatch(input)) {

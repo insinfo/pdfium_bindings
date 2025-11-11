@@ -2,7 +2,7 @@ name: 'PDFiumBindings'
 description: 'Bindings to PDFium'
 output: 'lib/src/pdfium_bindings.dart'
 llvm-path:     
-  - 'C:\Program Files\llvm'      
+  - 'C:\LLVM'      
 headers:
   entry-points:
     - 'C:\MyDartProjects\pdfium\pdfium-binaries\win\include\fpdfview.h' 

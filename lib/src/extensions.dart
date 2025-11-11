@@ -1,3 +1,4 @@
+//C:\MyDartProjects\pdfium\pdfium_bindings\lib\src\extensions.dart
 import 'package:pdfium_bindings/pdfium_bindings.dart';
 
 extension LastError on PDFiumBindings {

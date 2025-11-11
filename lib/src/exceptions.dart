@@ -5,7 +5,8 @@ class PdfiumException implements Exception {
   int? errorCode;
 
   /// A message describing the error.
-  String? message = '';
+  String?
+      message; // Removido '= ''', pois é desnecessário para um tipo anulável
 
   /// Default constructor of PdfiumException
   PdfiumException({this.message});
@@ -25,25 +26,80 @@ class PdfiumException implements Exception {
 }
 
 class UnknownException extends PdfiumException {
-  UnknownException({String? message}) : super(message: message);
+  UnknownException({super.message});
 }
 
 class FileException extends PdfiumException {
-  FileException({String? message}) : super(message: message);
+  FileException({super.message});
 }
 
 class FormatException extends PdfiumException {
-  FormatException({String? message}) : super(message: message);
+  FormatException({super.message});
 }
 
 class PasswordException extends PdfiumException {
-  PasswordException({String? message}) : super(message: message);
+  PasswordException({super.message});
 }
 
 class SecurityException extends PdfiumException {
-  SecurityException({String? message}) : super(message: message);
+  SecurityException({super.message});
 }
 
 class PageException extends PdfiumException {
-  PageException({String? message}) : super(message: message);
+  PageException({super.message});
+}
+
+/// Thrown when the native pdfium dynamic library cannot be located.
+class MissingLibraryException extends PdfiumException {
+  MissingLibraryException({required String path})
+      : super(message: 'Unable to locate PDFium library at $path');
+}
+
+/// Thrown when rendering a page fails.
+class PageRenderException extends PageException {
+  PageRenderException({
+    super.message,
+    this.pageIndex,
+    required this.width,
+    required this.height,
+    required this.flags,
+    required this.rotate,
+    this.errorDetails,
+  });
+
+  /// Zero-based index of the page being rendered, if known.
+  final int? pageIndex;
+
+  /// Width passed to the renderer.
+  final int width;
+
+  /// Height passed to the renderer.
+  final int height;
+
+  /// Flags passed to the renderer.
+  final int flags;
+
+  /// Rotation passed to the renderer.
+  final int rotate;
+
+  /// Additional diagnostic information.
+  final String? errorDetails;
+
+  @override
+  String toString() {
+    final buffer = StringBuffer(runtimeType)
+      ..write(': ')
+      ..write(message ?? 'Rendering failed');
+    if (pageIndex != null) buffer.write(' | pageIndex=$pageIndex');
+    buffer.write(' | size=${width}x$height');
+    buffer.write(' | flags=$flags');
+    buffer.write(' | rotate=$rotate');
+    if (errorDetails != null && errorDetails!.isNotEmpty) {
+      buffer.write(' | details=$errorDetails');
+    }
+    if (errorCode != null) {
+      buffer.write(' | code=$errorCode');
+    }
+    return buffer.toString();
+  }
 }

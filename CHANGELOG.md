@@ -33,3 +33,10 @@
 ### Fixed
 
 - None
+
+## 3.0.0
+
+- Require Dart 3.3.0 and FFI >= 2.1.1.
+- Add PdfiumConfig and improve lifecycle/finalizer handling.
+- Add rendering helpers (image/region/async) with expanded tests.
+- Clean up analyzer lints and modernize imports.

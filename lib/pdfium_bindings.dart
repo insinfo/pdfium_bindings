@@ -1,5 +1,3 @@
-library pdfium_bindings;
-
 export 'src/exceptions.dart';
 export 'src/extensions.dart';
 export 'src/pdfium_bindings.dart';
