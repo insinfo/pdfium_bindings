@@ -434,6 +434,82 @@ class PdfiumWrap {
     );
   }
 
+  /// Reads the textual content of a page. When [pageIndex] is omitted the
+  /// currently loaded page is used.
+  String extractPageText({
+    int? pageIndex,
+    bool normalizeWhitespace = true,
+  }) {
+    _ensureNotDestroyed();
+    if (_isPointerNull(_document)) {
+      throw PdfiumException(message: 'Document not load');
+    }
+
+    Pointer<fpdf_page_t__>? targetPage;
+    var closeTempPage = false;
+
+    if (pageIndex == null) {
+      if (_isPointerNull(_page)) {
+        throw PdfiumException(message: 'Page not load');
+      }
+      targetPage = _page;
+    } else if (!_isPointerNull(_page) && _currentPageIndex == pageIndex) {
+      targetPage = _page;
+    } else {
+      final tempPage = pdfium.FPDF_LoadPage(_document!, pageIndex);
+      if (_isPointerNull(tempPage)) {
+        final err = pdfium.getLastErrorMessage();
+        final reason = err.isEmpty
+            ? 'Failed to load page index $pageIndex for text extraction'
+            : err;
+        throw PageException(message: reason);
+      }
+      targetPage = tempPage;
+      closeTempPage = true;
+    }
+
+    final textPage = _editing.loadTextPage(targetPage!);
+    if (_isPointerNull(textPage)) {
+      if (closeTempPage) {
+        pdfium.FPDF_ClosePage(targetPage);
+      }
+      throw PageException(message: 'Unable to load text page');
+    }
+
+    final charCount = _editing.countChars(textPage);
+    if (charCount <= 0) {
+      _editing.closeTextPage(textPage);
+      if (closeTempPage) {
+        pdfium.FPDF_ClosePage(targetPage);
+      }
+      return '';
+    }
+
+    final bufferLength = charCount + 1;
+    final buffer = allocator<Uint16>(bufferLength);
+    try {
+      final copied = _editing.getText(textPage, 0, charCount, buffer);
+      if (copied <= 0) {
+        return '';
+      }
+      final codeUnits = buffer.asTypedList(copied);
+      final trimmedUnits = codeUnits.isNotEmpty && codeUnits.last == 0
+          ? codeUnits.sublist(0, codeUnits.length - 1)
+          : codeUnits;
+      var text = String.fromCharCodes(trimmedUnits);
+      if (normalizeWhitespace) {
+        text = _normalizeExtractedText(text);
+      }
+      return text;
+    } finally {
+      _editing.closeTextPage(textPage);
+      allocator.free(buffer);
+      if (closeTempPage) {
+        pdfium.FPDF_ClosePage(targetPage);
+      }
+    }
+  }
+
   /// Asynchronously renders a page in an isolate and returns it as an [Image].
   static Future<Image> renderPageToImageAsync({
     required PdfiumConfig config,
@@ -797,6 +873,13 @@ class PdfiumWrap {
   ) {
     final value = explicitValue ?? (pageValue * scale).round();
     return value <= 0 ? 1 : value;
+  }
+
+  static String _normalizeExtractedText(String value) {
+    if (value.isEmpty) {
+      return value;
+    }
+    return value.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
   }
 
   void _mergeDocumentsInternal({

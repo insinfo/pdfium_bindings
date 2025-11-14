@@ -9,7 +9,6 @@ import 'package:pdfium_bindings/src/pdfium_bindings.dart';
 final class FPDF_FILEWRITE extends Struct {
   @Int()
   external int version;
-
   external Pointer<NativeFunction<WriteBlockNative>> WriteBlock;
 }
 
@@ -60,6 +59,31 @@ class PdfiumEditingBindings {
     'FPDF_CopyViewerPreferences',
   );
 
+  late final _loadTextPage = _dylib.lookupFunction<
+      FPDF_TEXTPAGE Function(FPDF_PAGE),
+      FPDF_TEXTPAGE Function(FPDF_PAGE)>('FPDFText_LoadPage');
+
+  late final _closeTextPage = _dylib.lookupFunction<
+      Void Function(FPDF_TEXTPAGE),
+      void Function(FPDF_TEXTPAGE)>('FPDFText_ClosePage');
+
+  late final _countChars = _dylib.lookupFunction<Int32 Function(FPDF_TEXTPAGE),
+      int Function(FPDF_TEXTPAGE)>('FPDFText_CountChars');
+
+  late final _getText = _dylib.lookupFunction<
+      Int32 Function(
+        FPDF_TEXTPAGE,
+        Int32,
+        Int32,
+        Pointer<Uint16>,
+      ),
+      int Function(
+        FPDF_TEXTPAGE,
+        int,
+        int,
+        Pointer<Uint16>,
+      )>('FPDFText_GetText');
+
   FPDF_DOCUMENT createNewDocument() => _createNewDocument();
 
   bool importPages(
@@ -80,4 +104,20 @@ class PdfiumEditingBindings {
   void copyViewerPreferences(FPDF_DOCUMENT dest, FPDF_DOCUMENT src) {
     _copyViewerPreferences(dest, src);
   }
+
+  FPDF_TEXTPAGE loadTextPage(FPDF_PAGE page) => _loadTextPage(page);
+
+  void closeTextPage(FPDF_TEXTPAGE textPage) {
+    _closeTextPage(textPage);
+  }
+
+  int countChars(FPDF_TEXTPAGE textPage) => _countChars(textPage);
+
+  int getText(
+    FPDF_TEXTPAGE textPage,
+    int startIndex,
+    int charCount,
+    Pointer<Uint16> buffer,
+  ) =>
+      _getText(textPage, startIndex, charCount, buffer);
 }

@@ -40,3 +40,7 @@
 - Add PdfiumConfig and improve lifecycle/finalizer handling.
 - Add rendering helpers (image/region/async) with expanded tests.
 - Clean up analyzer lints and modernize imports.
+
+## 3.1.0
+
+- Added `extractPageText` API with example and tests for page text extraction.

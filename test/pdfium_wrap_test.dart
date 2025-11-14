@@ -108,6 +108,19 @@ void main() {
       wrapper.closeDocument();
     }, skip: skipReason);
 
+    test('extractPageText returns textual content', () {
+      wrapper.loadDocumentFromPath(pdfPath);
+
+      final directText = wrapper.extractPageText(pageIndex: 0);
+      expect(directText.trim(), isNotEmpty);
+
+      wrapper.loadPage(0);
+      final currentText = wrapper.extractPageText();
+      expect(currentText.trim(), directText.trim());
+
+      wrapper.closeDocument();
+    }, skip: skipReason);
+
     test('renderPageToImageAsync renders on isolate', () async {
       final image = await PdfiumWrap.renderPageToImageAsync(
         config: PdfiumConfig(libraryPath: libraryPath),
