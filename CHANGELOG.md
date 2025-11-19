@@ -44,3 +44,7 @@
 ## 3.1.0
 
 - Added `extractPageText` API with example and tests for page text extraction.
+
+## 3.1.1
+
+- fix bug on config of PdfiumService
