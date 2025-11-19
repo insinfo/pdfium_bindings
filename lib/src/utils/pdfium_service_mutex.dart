@@ -1,9 +1,8 @@
 // file: pdfium_service.dart
-import 'dart:io';
 
 import 'package:native_synchronization/primitives.dart';
 import 'package:native_synchronization/sendable.dart';
-import 'package:path/path.dart' as p;
+
 import 'package:pdfium_bindings/pdfium_bindings.dart';
 
 /// Sendable handle that carries the mutex across isolates.
@@ -67,24 +66,7 @@ class PdfiumServiceMutex {
     });
   }
 
-  PdfiumWrap _createPdfium() {
-    final libraryPath = _resolveLibraryPath();
-    final config = PdfiumConfig(libraryPath: libraryPath);
-    return PdfiumWrap(config: config);
-  }
-
-  String _resolveLibraryPath() {
-    final root = Directory.current.path;
-    final candidates = <String>[
-      p.join(root, 'pdfium.dll'),
-      p.join(root, 'libpdfium.so'),
-      p.join(root, 'libpdfium.dylib'),
-    ];
-    for (final c in candidates) {
-      if (File(c).existsSync()) {
-        return c;
-      }
-    }
-    throw MissingLibraryException(path: candidates.first);
+  PdfiumWrap _createPdfium({PdfiumConfig? config}) {
+    return PdfiumWrap(config: config ?? const PdfiumConfig());
   }
 }
