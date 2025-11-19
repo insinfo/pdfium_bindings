@@ -156,6 +156,7 @@ class PdfiumWrap {
     final DynamicLibrary dylib = Platform.isIOS
         ? DynamicLibrary.process()
         : DynamicLibrary.open(resolvedLibraryPath);
+    print('PdfiumWrap resolvedLibraryPath $resolvedLibraryPath | Platform.isLinux ${Platform.isLinux}');
     pdfium = PDFiumBindings(dylib);
     _editing = PdfiumEditingBindings(dylib);
 
@@ -1012,7 +1013,10 @@ class PdfiumWrap {
     if (Platform.isMacOS) {
       return path.join(Directory.current.path, 'libpdfium.dylib');
     }
-    if (Platform.isLinux || Platform.isAndroid) {
+    if (Platform.isLinux) {
+      return path.join(Directory.current.path, 'libpdfium.so');
+    }
+    if (Platform.isAndroid) {
       return path.join(Directory.current.path, 'libpdfium.so');
     }
     return path.join(Directory.current.path, 'pdfium.dll');
