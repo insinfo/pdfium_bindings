@@ -1,0 +1,6 @@
+# PDFium is not safe to exercise from multiple Dart isolates concurrently.
+# When `dart test` runs multiple test files in parallel, it can intermittently
+# crash the process (Windows access violation).
+#
+# Keep the suite reliable by running tests sequentially.
+concurrency: 1

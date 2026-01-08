@@ -1,17 +1,33 @@
 name: 'PDFiumBindings'
 description: 'Bindings to PDFium'
 output: 'lib/src/pdfium_bindings.dart'
-llvm-path:     
-  - 'C:\LLVM'      
+silence-enum-warning: true
+llvm-path:
+  - 'C:/LLVM'
 headers:
   entry-points:
-    - 'C:\MyDartProjects\pdfium\pdfium-binaries\win\include\fpdfview.h' 
+    - 'pdfium-binaries/win/include/fpdfview.h'
+    - 'pdfium-binaries/win/include/fpdf_doc.h'
+    - 'pdfium-binaries/win/include/fpdf_text.h'
+    - 'pdfium-binaries/win/include/fpdf_formfill.h'
+    - 'pdfium-binaries/win/include/fpdf_edit.h'
+    - 'pdfium-binaries/win/include/fpdf_save.h'
+    - 'pdfium-binaries/win/include/fpdf_ppo.h'
+    - 'pdfium-binaries/win/include/fpdf_progressive.h'
+    - 'pdfium-binaries/win/include/fpdf_signature.h'
+    - 'pdfium-binaries/win/include/fpdf_searchex.h'
+    - 'pdfium-binaries/win/include/fpdf_attachment.h'
+    - 'pdfium-binaries/win/include/fpdf_flatten.h'
+    - 'pdfium-binaries/win/include/fpdf_thumbnail.h'
+    - 'pdfium-binaries/win/include/fpdf_transformpage.h'
+    - 'pdfium-binaries/win/include/fpdf_structtree.h'
+    - 'pdfium-binaries/win/include/fpdf_sysfontinfo.h'
   include-directives:
     #- '**sftp.h'
     #- 'libssh/include/libssh/**'
-    - 'C:\MyDartProjects\pdfium\pdfium-binaries\win\include\**'
-#compiler-opts:
-  #- '-Ilibssh/'
+    - 'pdfium-binaries/win/include/**'
+compiler-opts:
+  - '-Ipdfium-binaries/win/include'
 
 
 

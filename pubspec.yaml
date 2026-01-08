@@ -1,6 +1,6 @@
 name: pdfium_bindings
 description: This project aims to wrap the complete [Pdfium](https://pdfium.googlesource.com/pdfium/) API in dart, over FFI.
-version: 3.1.1
+version: 3.2.0
 homepage: https://github.com/insinfo/pdfium_bindings
 
 environment:
@@ -17,8 +17,7 @@ dev_dependencies:
   build_runner: ^2.4.15
   ffigen: ^19.0.0
   http: ^1.6.0
-  lint: ^2.7.0
- 
+  lint: ^2.7.0 
   test: ^1.26.3
  
 #dart run ffigen --config ffigen.yaml

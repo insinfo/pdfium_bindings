@@ -48,3 +48,10 @@
 ## 3.1.1
 
 - fix bug on config of PdfiumService
+
+## 3.2.0
+
+- Fix `ffigen` configuration so PDFium headers are discovered reliably and regenerate bindings accordingly.
+- Remove the redundant editing bindings and use the unified generated `PDFiumBindings` throughout the wrapper.
+- Improve rendering correctness for AcroForm widgets (including visual signatures) by enabling FormFill + `FPDF_FFLDraw`.
+- Expand test coverage for rendering and text extraction (including signed/form PDFs and `jornal.pdf`), plus basic PNG/JPEG output validation.

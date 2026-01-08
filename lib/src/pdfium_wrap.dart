@@ -13,7 +13,6 @@ import 'package:path/path.dart' as path;
 import 'package:pdfium_bindings/src/exceptions.dart';
 import 'package:pdfium_bindings/src/extensions.dart';
 import 'package:pdfium_bindings/src/pdfium_bindings.dart';
-import 'package:pdfium_bindings/src/pdfium_editing_bindings.dart';
 import 'package:pdfium_bindings/src/utils.dart';
 
 /// Immutable configuration for initializing the PDFium library.
@@ -102,6 +101,8 @@ class _CleanupState {
   Pointer<fpdf_page_t__>? page;
   Pointer<fpdf_bitmap_t__>? bitmap;
   Pointer<Uint8>? documentBytes;
+  Pointer<FPDF_FORMFILLINFO>? formFillInfo;
+  FPDF_FORMHANDLE? formHandle;
 
   bool libraryDestroyed = false;
   bool disposed = false;
@@ -121,8 +122,76 @@ const int _kSaveFlagNoIncremental = 2;
 final Map<int, RandomAccessFile> _fileWriterRegistry =
     <int, RandomAccessFile>{};
 
+final Map<int, Timer> _formFillTimers = <int, Timer>{};
+int _formFillTimerSeq = 1;
+
+final Map<int, FPDF_PAGE> _formFillCurrentPageByDoc = <int, FPDF_PAGE>{};
+final Map<int, int> _formFillCurrentPageIndexByDoc = <int, int>{};
+
+void _formFillSetCurrentPageForDoc(
+  FPDF_DOCUMENT document,
+  FPDF_PAGE page,
+  int pageIndex,
+) {
+  _formFillCurrentPageByDoc[document.address] = page;
+  _formFillCurrentPageIndexByDoc[document.address] = pageIndex;
+}
+
+void _formFillClearCurrentPageForDoc(
+  FPDF_DOCUMENT document,
+  FPDF_PAGE page,
+) {
+  final current = _formFillCurrentPageByDoc[document.address];
+  if (current != null && identical(current, page)) {
+    _formFillCurrentPageByDoc.remove(document.address);
+    _formFillCurrentPageIndexByDoc.remove(document.address);
+  }
+}
+
+// PDFium's library lifecycle is process-global and can crash if
+// `FPDF_DestroyLibrary()` races across isolates. To keep the wrapper stable
+// (including when used from multiple isolates), we initialize PDFium once per
+// isolate and never explicitly destroy the library.
+//
+// Note: The config pointer passed to `FPDF_InitLibraryWithConfig()` must remain
+// valid until `FPDF_DestroyLibrary()`. Since we do not destroy the library, we
+// intentionally keep this memory for the lifetime of the isolate.
+bool _pdfiumLibraryInitialized = false;
+final List<Pointer<Int8>> _pdfiumLibraryFontPathPointers = <Pointer<Int8>>[];
+
+class _SyncFileMutex {
+  _SyncFileMutex(String name)
+      : _lockFile = File(path.join(Directory.systemTemp.path, name));
+
+  final File _lockFile;
+
+  T runExclusive<T>(T Function() action) {
+    _lockFile.createSync(recursive: true);
+    final handle = _lockFile.openSync(mode: FileMode.write);
+    try {
+      handle.lockSync(FileLock.blockingExclusive);
+      try {
+        return action();
+      } finally {
+        handle.unlockSync();
+      }
+    } finally {
+      handle.closeSync();
+    }
+  }
+}
+
+final _SyncFileMutex _pdfiumLibraryInitMutex =
+    _SyncFileMutex('pdfium_bindings_init.lock');
+
+typedef WriteBlockNative = Int Function(
+  Pointer<FPDF_FILEWRITE_>,
+  Pointer<Void>,
+  UnsignedLong,
+);
+
 int _fileWriteCallback(
-  Pointer<FPDF_FILEWRITE> fileWrite,
+  Pointer<FPDF_FILEWRITE_> fileWrite,
   Pointer<Void> data,
   int size,
 ) {
@@ -158,7 +227,6 @@ class PdfiumWrap {
         : DynamicLibrary.open(resolvedLibraryPath);
     //print('PdfiumWrap resolvedLibraryPath $resolvedLibraryPath | Platform.isLinux ${Platform.isLinux}');
     pdfium = PDFiumBindings(dylib);
-    _editing = PdfiumEditingBindings(dylib);
 
     _cleanup = _CleanupState(pdfium: pdfium, allocator: allocator);
     _initializeLibrary();
@@ -167,10 +235,8 @@ class PdfiumWrap {
 
   /// Bindings to PDFium.
   late final PDFiumBindings pdfium;
-  late final PdfiumEditingBindings _editing;
 
   /// PDFium configuration pointer.
-  Pointer<FPDF_LIBRARY_CONFIG>? _configPointer;
   final Allocator allocator;
   final PdfiumConfig _options;
 
@@ -183,6 +249,8 @@ class PdfiumWrap {
   Pointer<Uint8>? _buffer;
   Pointer<Uint8>? _documentBytes;
   int? _currentPageIndex;
+  FPDF_FORMHANDLE? _formHandle;
+  bool _formFillPageAttached = false;
 
   /// True when a document is currently loaded.
   bool get hasOpenDocument => !_isPointerNull(_document);
@@ -281,6 +349,11 @@ class PdfiumWrap {
     _page = page;
     _cleanup.page = page;
     _currentPageIndex = index;
+    if (_formHandle != null && _formHandle != nullptr) {
+      _formFillSetCurrentPageForDoc(_document!, _page!, index);
+      pdfium.FORM_OnAfterLoadPage(_page!, _formHandle!);
+      _formFillPageAttached = true;
+    }
     return this;
   }
 
@@ -320,6 +393,7 @@ class PdfiumWrap {
     int flags = 0,
     int startX = 0,
     int startY = 0,
+    bool renderFormFields = false,
   }) {
     _ensureNotDestroyed();
     if (_isPointerNull(_page)) {
@@ -355,6 +429,33 @@ class PdfiumWrap {
       rotate,
       flags,
     );
+    final shouldRenderForms = renderFormFields ||
+        (!_isPointerNull(_document) &&
+            pdfium.FPDF_GetFormType(_document!) != 0);
+    if (shouldRenderForms) {
+      _ensureFormFill();
+      if (_formHandle != null && _formHandle != nullptr) {
+        if (!_formFillPageAttached) {
+          if (!_isPointerNull(_document) && _currentPageIndex != null) {
+            _formFillSetCurrentPageForDoc(
+                _document!, _page!, _currentPageIndex!);
+          }
+          pdfium.FORM_OnAfterLoadPage(_page!, _formHandle!);
+          _formFillPageAttached = true;
+        }
+        pdfium.FPDF_FFLDraw(
+          _formHandle!,
+          _bitmap!,
+          _page!,
+          startX,
+          startY,
+          width,
+          height,
+          rotate,
+          flags,
+        );
+      }
+    }
 
     final rawBuffer = pdfium.FPDFBitmap_GetBuffer(_bitmap!);
     if (rawBuffer == nullptr) {
@@ -386,6 +487,7 @@ class PdfiumWrap {
     int flags = 0,
     int startX = 0,
     int startY = 0,
+    bool renderFormFields = false,
   }) {
     _ensureNotDestroyed();
     if (_isPointerNull(_page)) {
@@ -403,6 +505,7 @@ class PdfiumWrap {
       flags: flags,
       startX: startX,
       startY: startY,
+      renderFormFields: renderFormFields,
     );
 
     return Image.fromBytes(
@@ -469,7 +572,7 @@ class PdfiumWrap {
       closeTempPage = true;
     }
 
-    final textPage = _editing.loadTextPage(targetPage!);
+    final textPage = pdfium.FPDFText_LoadPage(targetPage!);
     if (_isPointerNull(textPage)) {
       if (closeTempPage) {
         pdfium.FPDF_ClosePage(targetPage);
@@ -477,9 +580,9 @@ class PdfiumWrap {
       throw PageException(message: 'Unable to load text page');
     }
 
-    final charCount = _editing.countChars(textPage);
+    final charCount = pdfium.FPDFText_CountChars(textPage);
     if (charCount <= 0) {
-      _editing.closeTextPage(textPage);
+      pdfium.FPDFText_ClosePage(textPage);
       if (closeTempPage) {
         pdfium.FPDF_ClosePage(targetPage);
       }
@@ -489,7 +592,12 @@ class PdfiumWrap {
     final bufferLength = charCount + 1;
     final buffer = allocator<Uint16>(bufferLength);
     try {
-      final copied = _editing.getText(textPage, 0, charCount, buffer);
+      final copied = pdfium.FPDFText_GetText(
+        textPage,
+        0,
+        charCount,
+        buffer.cast<UnsignedShort>(),
+      );
       if (copied <= 0) {
         return '';
       }
@@ -503,7 +611,7 @@ class PdfiumWrap {
       }
       return text;
     } finally {
-      _editing.closeTextPage(textPage);
+      pdfium.FPDFText_ClosePage(textPage);
       allocator.free(buffer);
       if (closeTempPage) {
         pdfium.FPDF_ClosePage(targetPage);
@@ -727,38 +835,50 @@ class PdfiumWrap {
   }
 
   void _initializeLibrary() {
-    _configPointer = allocator<FPDF_LIBRARY_CONFIG>();
-    _configPointer!.ref.version = _options.version;
-    _configPointer!.ref.m_v8EmbedderSlot = _options.v8EmbedderSlot;
-    _configPointer!.ref.m_pIsolate = _options.isolateAddress != null
-        ? Pointer<Void>.fromAddress(_options.isolateAddress!)
-        : nullptr;
-
-    final fontPaths = List<String>.from(_options.userFontPaths);
-    if (fontPaths.isNotEmpty) {
-      final fontArray = allocator<Pointer<Int8>>(fontPaths.length + 1);
-      _cleanup.fontPathArray = fontArray;
-      for (var i = 0; i < fontPaths.length; i++) {
-        final fontPtr = stringToNativeInt8(
-          fontPaths[i],
-          allocator: allocator,
-        );
-        (fontArray + i).value = fontPtr;
-        _cleanup.fontPathPointers.add(fontPtr);
+    _pdfiumLibraryInitMutex.runExclusive(() {
+      if (_pdfiumLibraryInitialized) {
+        return;
       }
-      (fontArray + fontPaths.length).value = nullptr;
-      _configPointer!.ref.m_pUserFontPaths = fontArray.cast();
-    } else {
-      _configPointer!.ref.m_pUserFontPaths = nullptr;
-    }
 
-    _cleanup.config = _configPointer;
-    pdfium.FPDF_InitLibraryWithConfig(_configPointer!);
+      // Use a stable allocator for the global config memory.
+      final configPointer = calloc<FPDF_LIBRARY_CONFIG>();
+      configPointer.ref.version = _options.version;
+      configPointer.ref.m_v8EmbedderSlot = _options.v8EmbedderSlot;
+      configPointer.ref.m_pIsolate = _options.isolateAddress != null
+          ? Pointer<Void>.fromAddress(_options.isolateAddress!)
+          : nullptr;
+
+      final fontPaths = List<String>.from(_options.userFontPaths);
+      if (fontPaths.isNotEmpty) {
+        final fontArray = calloc<Pointer<Int8>>(fontPaths.length + 1);
+        for (var i = 0; i < fontPaths.length; i++) {
+          final fontPtr = stringToNativeInt8(fontPaths[i], allocator: calloc);
+          (fontArray + i).value = fontPtr;
+          _pdfiumLibraryFontPathPointers.add(fontPtr);
+        }
+        (fontArray + fontPaths.length).value = nullptr;
+        configPointer.ref.m_pUserFontPaths = fontArray.cast();
+      } else {
+        configPointer.ref.m_pUserFontPaths = nullptr;
+      }
+
+      pdfium.FPDF_InitLibraryWithConfig(configPointer);
+      _pdfiumLibraryInitialized = true;
+    });
   }
 
   void _closePageInternal() {
     if (_isPointerNull(_page)) {
       return;
+    }
+    if (_formHandle != null &&
+        _formHandle != nullptr &&
+        _formFillPageAttached) {
+      pdfium.FORM_OnBeforeClosePage(_page!, _formHandle!);
+      if (!_isPointerNull(_document)) {
+        _formFillClearCurrentPageForDoc(_document!, _page!);
+      }
+      _formFillPageAttached = false;
     }
     pdfium.FPDF_ClosePage(_page!);
     _cleanup.page = null;
@@ -773,6 +893,7 @@ class PdfiumWrap {
     if (_isPointerNull(_document)) {
       return;
     }
+    _destroyFormFill();
     pdfium.FPDF_CloseDocument(_document!);
     _cleanup.document = null;
     _document = null;
@@ -795,6 +916,8 @@ class PdfiumWrap {
   }
 
   void _destroyLibraryInternal() {
+    // Only clean up per-instance resources. Do NOT call FPDF_DestroyLibrary():
+    // it is process-global and can race across isolates.
     if (_cleanup.libraryDestroyed) {
       return;
     }
@@ -804,6 +927,10 @@ class PdfiumWrap {
     }
 
     if (_cleanup.document != null && _cleanup.document != nullptr) {
+      if (_cleanup.formHandle != null && _cleanup.formHandle != nullptr) {
+        pdfium.FPDFDOC_ExitFormFillEnvironment(_cleanup.formHandle!);
+        _cleanup.formHandle = null;
+      }
       pdfium.FPDF_CloseDocument(_cleanup.document!);
     }
 
@@ -812,22 +939,9 @@ class PdfiumWrap {
       _cleanup.documentBytes = null;
     }
 
-    for (final fontPtr in _cleanup.fontPathPointers) {
-      _cleanup.allocator.free(fontPtr);
-    }
-    _cleanup.fontPathPointers.clear();
-
-    if (_cleanup.fontPathArray != null) {
-      _cleanup.allocator.free(_cleanup.fontPathArray!);
-      _cleanup.fontPathArray = null;
-    }
-
-    if (_cleanup.config != null) {
-      pdfium.FPDF_DestroyLibrary();
-      _cleanup.allocator.free(_cleanup.config!);
-      _cleanup.config = null;
-    } else {
-      pdfium.FPDF_DestroyLibrary();
+    if (_cleanup.formFillInfo != null) {
+      _cleanup.allocator.free(_cleanup.formFillInfo!);
+      _cleanup.formFillInfo = null;
     }
 
     _cleanup.libraryDestroyed = true;
@@ -888,7 +1002,7 @@ class PdfiumWrap {
     required String outputPath,
     required bool copyViewerPreferences,
   }) {
-    final destDoc = _editing.createNewDocument();
+    final destDoc = pdfium.FPDF_CreateNewDocument();
     if (_isPointerNull(destDoc)) {
       throw PdfiumException(message: 'Failed to create destination document');
     }
@@ -929,22 +1043,24 @@ class PdfiumWrap {
           if (source.pageIndices != null && source.pageIndices!.isNotEmpty) {
             final rangeString = _indicesToRangeString(source.pageIndices!);
             rangePtr = stringToNativeInt8(rangeString, allocator: allocator);
-            success = _editing.importPages(
-              destDoc,
-              doc,
-              rangePtr.cast(),
-              insertAt,
-            );
+            success = pdfium.FPDF_ImportPages(
+                  destDoc,
+                  doc,
+                  rangePtr.cast(),
+                  insertAt,
+                ) !=
+                0;
           } else {
             rangePtr = source.pageRange != null
                 ? stringToNativeInt8(source.pageRange!, allocator: allocator)
                 : null;
-            success = _editing.importPages(
-              destDoc,
-              doc,
-              rangePtr != null ? rangePtr.cast() : nullptr,
-              insertAt,
-            );
+            success = pdfium.FPDF_ImportPages(
+                  destDoc,
+                  doc,
+                  rangePtr != null ? rangePtr.cast() : nullptr,
+                  insertAt,
+                ) !=
+                0;
           }
         } finally {
           if (rangePtr != null) {
@@ -960,7 +1076,7 @@ class PdfiumWrap {
       }
 
       if (copyViewerPreferences && openedDocs.isNotEmpty) {
-        _editing.copyViewerPreferences(destDoc, openedDocs.first);
+        pdfium.FPDF_CopyViewerPreferences(destDoc, openedDocs.first);
       }
 
       _saveDocumentToPath(destDoc, outputPath);
@@ -988,11 +1104,12 @@ class PdfiumWrap {
     final sink = file.openSync(mode: FileMode.write);
     _fileWriterRegistry[writer.address] = sink;
 
-    final success = _editing.saveAsCopy(
-      document,
-      writer,
-      _kSaveFlagNoIncremental,
-    );
+    final success = pdfium.FPDF_SaveAsCopy(
+          document,
+          writer,
+          _kSaveFlagNoIncremental,
+        ) !=
+        0;
 
     pdfium.FPDF_CloseDocument(document);
 
@@ -1039,6 +1156,412 @@ class PdfiumWrap {
   }
 }
 
+void _formFillRelease(Pointer<FPDF_FORMFILLINFO> pThis) {}
+
+void _formFillInvalidate(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_PAGE page,
+  double left,
+  double top,
+  double right,
+  double bottom,
+) {}
+
+void _formFillOutputSelectedRect(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_PAGE page,
+  double left,
+  double top,
+  double right,
+  double bottom,
+) {}
+
+void _formFillSetCursor(Pointer<FPDF_FORMFILLINFO> pThis, int nCursorType) {}
+
+int _formFillSetTimer(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  int uElapse,
+  TimerCallback lpTimerFunc,
+) {
+  final id = _formFillTimerSeq++;
+  final callback = lpTimerFunc.asFunction<DartTimerCallbackFunction>();
+  _formFillTimers[id] = Timer(Duration(milliseconds: uElapse), () {
+    try {
+      callback(id);
+    } finally {
+      _formFillTimers.remove(id);
+    }
+  });
+  return id;
+}
+
+void _formFillKillTimer(Pointer<FPDF_FORMFILLINFO> pThis, int nTimerID) {
+  _formFillTimers.remove(nTimerID)?.cancel();
+}
+
+void _formFillOnChange(Pointer<FPDF_FORMFILLINFO> pThis) {}
+
+FPDF_PAGE _formFillGetPage(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_DOCUMENT document,
+  int nPageIndex,
+) {
+  final curIdx = _formFillCurrentPageIndexByDoc[document.address];
+  if (curIdx != null && curIdx == nPageIndex) {
+    return _formFillCurrentPageByDoc[document.address] ?? nullptr;
+  }
+  return nullptr;
+}
+
+FPDF_PAGE _formFillGetCurrentPage(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_DOCUMENT document,
+) {
+  return _formFillCurrentPageByDoc[document.address] ?? nullptr;
+}
+
+int _formFillGetRotation(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_PAGE page,
+) {
+  return 0;
+}
+
+void _formFillExecuteNamedAction(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_BYTESTRING namedAction,
+) {}
+
+void _formFillSetTextFieldFocus(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_WIDESTRING value,
+  int valueLen,
+  int isFocus,
+) {}
+
+void _formFillDoUriAction(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_BYTESTRING bsURI,
+) {}
+
+void _formFillDoGoToAction(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  int nPageIndex,
+  int zoomMode,
+  Pointer<Float> fPosArray,
+  int sizeofArray,
+) {}
+
+int _formFillGetCurrentPageIndex(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_DOCUMENT document,
+) {
+  return _formFillCurrentPageIndexByDoc[document.address] ?? 0;
+}
+
+void _formFillSetCurrentPage(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_DOCUMENT document,
+  int iCurPage,
+) {}
+
+void _formFillGotoUrl(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_DOCUMENT document,
+  FPDF_WIDESTRING wsURL,
+) {}
+
+void _formFillGetPageViewRect(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_PAGE page,
+  Pointer<Double> left,
+  Pointer<Double> top,
+  Pointer<Double> right,
+  Pointer<Double> bottom,
+) {}
+
+void _formFillPageEvent(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  int pageCount,
+  int eventType,
+) {}
+
+int _formFillPopupMenu(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_PAGE page,
+  FPDF_WIDGET hWidget,
+  int menuFlag,
+  double x,
+  double y,
+) {
+  return 0;
+}
+
+Pointer<FPDF_FILEHANDLER> _formFillOpenFile(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  int fileFlag,
+  FPDF_WIDESTRING wsURL,
+  Pointer<Char> mode,
+) {
+  return nullptr;
+}
+
+void _formFillEmailTo(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  Pointer<FPDF_FILEHANDLER> fileHandler,
+  FPDF_WIDESTRING pTo,
+  FPDF_WIDESTRING pSubject,
+  FPDF_WIDESTRING pCC,
+  FPDF_WIDESTRING pBcc,
+  FPDF_WIDESTRING pMsg,
+) {}
+
+void _formFillUploadTo(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  Pointer<FPDF_FILEHANDLER> fileHandler,
+  int fileFlag,
+  FPDF_WIDESTRING uploadTo,
+) {}
+
+int _formFillGetPlatform(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  Pointer<Void> platform,
+  int length,
+) {
+  return 0;
+}
+
+int _formFillGetLanguage(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  Pointer<Void> language,
+  int length,
+) {
+  return 0;
+}
+
+Pointer<FPDF_FILEHANDLER> _formFillDownloadFromUrl(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_WIDESTRING url,
+) {
+  return nullptr;
+}
+
+int _formFillPostRequestUrl(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_WIDESTRING wsURL,
+  FPDF_WIDESTRING wsData,
+  FPDF_WIDESTRING wsContentType,
+  FPDF_WIDESTRING wsEncode,
+  FPDF_WIDESTRING wsHeader,
+  Pointer<FPDF_BSTR> response,
+) {
+  return 0;
+}
+
+int _formFillPutRequestUrl(
+  Pointer<FPDF_FORMFILLINFO> pThis,
+  FPDF_WIDESTRING wsURL,
+  FPDF_WIDESTRING wsData,
+  FPDF_WIDESTRING wsEncode,
+) {
+  return 0;
+}
+
+void _formFillOnFocusChange(
+  Pointer<FPDF_FORMFILLINFO> param,
+  FPDF_ANNOTATION annot,
+  int pageIndex,
+) {}
+
+void _formFillDoUriActionWithKeyboardModifier(
+  Pointer<FPDF_FORMFILLINFO> param,
+  FPDF_BYTESTRING uri,
+  int modifiers,
+) {}
+
+extension _PdfiumFormFill on PdfiumWrap {
+  void _ensureFormFill() {
+    if (_formHandle != null && _formHandle != nullptr) {
+      return;
+    }
+    if (PdfiumWrap._isPointerNull(_document)) {
+      return;
+    }
+
+    final info = allocator<FPDF_FORMFILLINFO>();
+    info.ref.version = 1;
+    info.ref.xfa_disabled = 1;
+
+    info.ref.Release =
+        Pointer.fromFunction<Void Function(Pointer<FPDF_FORMFILLINFO>)>(
+      _formFillRelease,
+    );
+    info.ref.FFI_Invalidate = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, FPDF_PAGE, Double, Double,
+            Double, Double)>(_formFillInvalidate);
+    info.ref.FFI_OutputSelectedRect = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, FPDF_PAGE, Double, Double,
+            Double, Double)>(_formFillOutputSelectedRect);
+    info.ref.FFI_SetCursor =
+        Pointer.fromFunction<Void Function(Pointer<FPDF_FORMFILLINFO>, Int)>(
+            _formFillSetCursor);
+    info.ref.FFI_SetTimer = Pointer.fromFunction<
+        Int Function(Pointer<FPDF_FORMFILLINFO>, Int, TimerCallback)>(
+      _formFillSetTimer,
+      0,
+    );
+    info.ref.FFI_KillTimer =
+        Pointer.fromFunction<Void Function(Pointer<FPDF_FORMFILLINFO>, Int)>(
+            _formFillKillTimer);
+    // Dart FFI can't safely provide callbacks that return structs by value.
+    // PDFium usually doesn't need this for headless rendering; keep it null.
+    info.ref.FFI_GetLocalTime = nullptr;
+    info.ref.FFI_OnChange =
+        Pointer.fromFunction<Void Function(Pointer<FPDF_FORMFILLINFO>)>(
+            _formFillOnChange);
+    info.ref.FFI_GetPage = Pointer.fromFunction<
+        FPDF_PAGE Function(
+            Pointer<FPDF_FORMFILLINFO>, FPDF_DOCUMENT, Int)>(_formFillGetPage);
+    info.ref.FFI_GetCurrentPage = Pointer.fromFunction<
+        FPDF_PAGE Function(Pointer<FPDF_FORMFILLINFO>, FPDF_DOCUMENT)>(
+      _formFillGetCurrentPage,
+    );
+    info.ref.FFI_GetRotation = Pointer.fromFunction<
+        Int Function(Pointer<FPDF_FORMFILLINFO>, FPDF_PAGE)>(
+      _formFillGetRotation,
+      0,
+    );
+    info.ref.FFI_ExecuteNamedAction = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, FPDF_BYTESTRING)>(
+      _formFillExecuteNamedAction,
+    );
+    info.ref.FFI_SetTextFieldFocus = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, FPDF_WIDESTRING, FPDF_DWORD,
+            FPDF_BOOL)>(
+      _formFillSetTextFieldFocus,
+    );
+    info.ref.FFI_DoURIAction = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, FPDF_BYTESTRING)>(
+      _formFillDoUriAction,
+    );
+    info.ref.FFI_DoGoToAction = Pointer.fromFunction<
+        Void Function(
+            Pointer<FPDF_FORMFILLINFO>, Int, Int, Pointer<Float>, Int)>(
+      _formFillDoGoToAction,
+    );
+    info.ref.FFI_GetCurrentPageIndex = Pointer.fromFunction<
+        Int Function(Pointer<FPDF_FORMFILLINFO>, FPDF_DOCUMENT)>(
+      _formFillGetCurrentPageIndex,
+      0,
+    );
+    info.ref.FFI_SetCurrentPage = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, FPDF_DOCUMENT, Int)>(
+      _formFillSetCurrentPage,
+    );
+    info.ref.FFI_GotoURL = Pointer.fromFunction<
+        Void Function(
+            Pointer<FPDF_FORMFILLINFO>, FPDF_DOCUMENT, FPDF_WIDESTRING)>(
+      _formFillGotoUrl,
+    );
+    info.ref.FFI_GetPageViewRect = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, FPDF_PAGE, Pointer<Double>,
+            Pointer<Double>, Pointer<Double>, Pointer<Double>)>(
+      _formFillGetPageViewRect,
+    );
+    info.ref.FFI_PageEvent = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, Int, FPDF_DWORD)>(
+      _formFillPageEvent,
+    );
+    info.ref.FFI_PopupMenu = Pointer.fromFunction<
+        Int Function(Pointer<FPDF_FORMFILLINFO>, FPDF_PAGE, FPDF_WIDGET, Int,
+            Float, Float)>(
+      _formFillPopupMenu,
+      0,
+    );
+    info.ref.FFI_OpenFile = Pointer.fromFunction<
+        Pointer<FPDF_FILEHANDLER> Function(
+            Pointer<FPDF_FORMFILLINFO>, Int, FPDF_WIDESTRING, Pointer<Char>)>(
+      _formFillOpenFile,
+    );
+    info.ref.FFI_EmailTo = Pointer.fromFunction<
+        Void Function(
+            Pointer<FPDF_FORMFILLINFO>,
+            Pointer<FPDF_FILEHANDLER>,
+            FPDF_WIDESTRING,
+            FPDF_WIDESTRING,
+            FPDF_WIDESTRING,
+            FPDF_WIDESTRING,
+            FPDF_WIDESTRING)>(_formFillEmailTo);
+    info.ref.FFI_UploadTo = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, Pointer<FPDF_FILEHANDLER>,
+            Int, FPDF_WIDESTRING)>(_formFillUploadTo);
+    info.ref.FFI_GetPlatform = Pointer.fromFunction<
+        Int Function(Pointer<FPDF_FORMFILLINFO>, Pointer<Void>, Int)>(
+      _formFillGetPlatform,
+      0,
+    );
+    info.ref.FFI_GetLanguage = Pointer.fromFunction<
+        Int Function(Pointer<FPDF_FORMFILLINFO>, Pointer<Void>, Int)>(
+      _formFillGetLanguage,
+      0,
+    );
+    info.ref.FFI_DownloadFromURL = Pointer.fromFunction<
+        Pointer<FPDF_FILEHANDLER> Function(
+            Pointer<FPDF_FORMFILLINFO>, FPDF_WIDESTRING)>(
+      _formFillDownloadFromUrl,
+    );
+    info.ref.FFI_PostRequestURL = Pointer.fromFunction<
+        Int Function(
+            Pointer<FPDF_FORMFILLINFO>,
+            FPDF_WIDESTRING,
+            FPDF_WIDESTRING,
+            FPDF_WIDESTRING,
+            FPDF_WIDESTRING,
+            FPDF_WIDESTRING,
+            Pointer<FPDF_BSTR>)>(
+      _formFillPostRequestUrl,
+      0,
+    );
+    info.ref.FFI_PutRequestURL = Pointer.fromFunction<
+        Int Function(Pointer<FPDF_FORMFILLINFO>, FPDF_WIDESTRING,
+            FPDF_WIDESTRING, FPDF_WIDESTRING)>(
+      _formFillPutRequestUrl,
+      0,
+    );
+    info.ref.FFI_OnFocusChange = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, FPDF_ANNOTATION, Int)>(
+      _formFillOnFocusChange,
+    );
+    info.ref.FFI_DoURIActionWithKeyboardModifier = Pointer.fromFunction<
+        Void Function(Pointer<FPDF_FORMFILLINFO>, FPDF_BYTESTRING, Int)>(
+      _formFillDoUriActionWithKeyboardModifier,
+    );
+
+    final handle = pdfium.FPDFDOC_InitFormFillEnvironment(_document!, info);
+    _formHandle = handle;
+    _cleanup.formHandle = handle;
+    _cleanup.formFillInfo = info;
+
+    if (_formHandle != null && _formHandle != nullptr) {
+      pdfium.FPDF_SetFormFieldHighlightAlpha(_formHandle!, 0);
+      pdfium.FORM_DoDocumentJSAction(_formHandle!);
+      pdfium.FORM_DoDocumentOpenAction(_formHandle!);
+    }
+  }
+
+  void _destroyFormFill() {
+    if (_formHandle != null && _formHandle != nullptr) {
+      pdfium.FPDFDOC_ExitFormFillEnvironment(_formHandle!);
+      _formHandle = null;
+      _cleanup.formHandle = null;
+    }
+    if (_cleanup.formFillInfo != null) {
+      allocator.free(_cleanup.formFillInfo!);
+      _cleanup.formFillInfo = null;
+    }
+  }
+}
+
 void _disposeCleanupState(_CleanupState state, {bool fromFinalizer = false}) {
   if (state.disposed) {
     return;
@@ -1072,13 +1595,8 @@ void _disposeCleanupState(_CleanupState state, {bool fromFinalizer = false}) {
       state.fontPathArray = null;
     }
 
-    if (state.config != null) {
-      state.pdfium.FPDF_DestroyLibrary();
-      allocator.free(state.config!);
-      state.config = null;
-    } else if (!state.libraryDestroyed) {
-      state.pdfium.FPDF_DestroyLibrary();
-    }
+    // Intentionally do NOT call FPDF_DestroyLibrary() from a finalizer.
+    // It is process-global and can crash if another isolate is still using it.
   } catch (error, stackTrace) {
     if (!fromFinalizer) {
       rethrow;
